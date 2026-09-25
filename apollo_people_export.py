@@ -7,6 +7,10 @@ Mirrors the saved UI search (Bengaluru HR/People leaders + founders at
     export APOLLO_API_KEY=xxxxxxxx
     python3 apollo_people_export.py --out leads.csv
 
+The script asks you to paste an Apollo search URL (copied from the
+browser address bar) and uses its filters. Press Enter without pasting
+to use the built-in FILTERS below. You can also pass --url "<url>".
+
 Uses the "search" endpoint by default (returns emails, may use credits).
 Pass --endpoint api_search for the free, no-email endpoint.
 
@@ -17,9 +21,11 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ENDPOINTS = {
@@ -82,8 +88,39 @@ CSV_FIELDS = [
 ]
 
 
-def fetch_page(url, api_key, page, per_page):
-    body = dict(FILTERS, page=page, per_page=per_page)
+# UI-only URL params that are not search filters.
+IGNORED_URL_PARAMS = {"page", "recommendation_config_id"}
+
+
+def filters_from_url(url):
+    """Turn an Apollo UI search URL into API filters.
+
+    personTitles[]=CEO&personTitles[]=COO  -> {"person_titles": ["CEO", "COO"]}
+    latestFundingDateRange[min]=24_months_ago -> {"latest_funding_date_range": {"min": ...}}
+    """
+    query = url.split("?", 1)[1] if "?" in url else url
+    filters = {}
+    for raw_key, value in urllib.parse.parse_qsl(query, keep_blank_values=True):
+        m = re.fullmatch(r"([^\[]+)(?:\[([^\]]*)\])?", raw_key)
+        if not m:
+            continue
+        name, sub = m.groups()
+        key = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+        if key in IGNORED_URL_PARAMS:
+            continue
+        if value in ("true", "false"):
+            value = value == "true"
+        if sub is None:
+            filters[key] = value
+        elif sub == "":
+            filters.setdefault(key, []).append(value)
+        else:
+            filters.setdefault(key, {})[sub] = value
+    return filters
+
+
+def fetch_page(url, api_key, page, per_page, filters):
+    body = dict(filters, page=page, per_page=per_page)
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
@@ -138,11 +175,24 @@ def main():
     ap.add_argument("--per-page", type=int, default=100, help="max 100")
     ap.add_argument("--max-pages", type=int, default=500, help="Apollo caps at 500")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between requests")
+    ap.add_argument("--url", help="Apollo search URL copied from the browser")
     args = ap.parse_args()
 
     api_key = os.environ.get("APOLLO_API_KEY")
     if not api_key:
         sys.exit("Set APOLLO_API_KEY (Apollo > Settings > Integrations > API)")
+
+    search_url = args.url
+    if search_url is None:
+        search_url = input("Paste your Apollo search URL (or press Enter for built-in filters):\n").strip()
+    if search_url:
+        filters = filters_from_url(search_url)
+        if not filters:
+            sys.exit("No filters found in that URL - copy the full address from the browser")
+        print(f"Using {len(filters)} filters from the URL", file=sys.stderr)
+    else:
+        filters = FILTERS
+        print("Using built-in FILTERS", file=sys.stderr)
 
     url = ENDPOINTS[args.endpoint]
     seen = set()
@@ -151,7 +201,7 @@ def main():
         writer.writeheader()
         page = 1
         while page <= args.max_pages:
-            data = fetch_page(url, api_key, page, args.per_page)
+            data = fetch_page(url, api_key, page, args.per_page, filters)
             people = (data.get("people") or []) + (data.get("contacts") or [])
             if not people:
                 break
