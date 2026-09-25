@@ -7,6 +7,9 @@ Mirrors the saved UI search (Bengaluru HR/People leaders + founders at
     export APOLLO_API_KEY=xxxxxxxx
     python3 apollo_people_export.py --out leads.csv
 
+Uses the "search" endpoint by default (returns emails, may use credits).
+Pass --endpoint api_search for the free, no-email endpoint.
+
 Uses only the Python standard library.
 """
 
@@ -131,7 +134,7 @@ def flatten(person):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="apollo_people.csv")
-    ap.add_argument("--endpoint", choices=ENDPOINTS, default="api_search")
+    ap.add_argument("--endpoint", choices=ENDPOINTS, default="search")
     ap.add_argument("--per-page", type=int, default=100, help="max 100")
     ap.add_argument("--max-pages", type=int, default=500, help="Apollo caps at 500")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between requests")
